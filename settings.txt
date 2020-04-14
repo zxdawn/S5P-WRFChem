@@ -1,0 +1,13 @@
+[ALL]
+start_date = 2019-07-25     ; The beginning of s5p data (yyyy-mm-dd)
+end_date = 2019-07-25       ; The end of s5p data (yyyy-mm-dd)
+s5p_nc_dir = s5p_data       ; where s5p data and LUT are saved
+wrf_nc_dir = wrf_data       ; where wrfchem data are saved
+output_data_dir = output    ; where generated files are saved
+output_fig_dir = figures    ; where figures are saved
+overwrite = False           ; whether overwrite the same generated files (True/False)
+n_workers = 4               ; Dask: number of workers to start
+threads_per_worker = 1      ; Dask: number of threads per each worker
+plot_weights = False        ; whether plot the weights
+plot_bamf = False           ; whether plot the bamfs
+plot_interp = False         ; whether plot the interpolated profile
