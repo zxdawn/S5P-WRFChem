@@ -1,0 +1,11 @@
+name, units, description
+amfTrop, 1, Tropospheric air mass factor for total tropospheric NO2 calculated by WRF-Chem
+amfTropVis, 1, Tropospheric air mass factor for visible tropospheric NO2 calculated by WRF-Chem
+swClr, 1, Clear-sky box tropospheric air mass factor based on LUT
+swCld, 1, Cloudy-sky box Tropospheric air mass factor based on LUT
+avgKernel, 1, Averaging kernel computed for the weighted average of cloudy and clear conditions
+no2apriori, parts-per-part, NO2 a priori profile used for each pixel. Pressure levels given in plevels
+plevels, hPa, TM5 pressure levels
+tropopause_pressure, hPa, TM5 tropopause pressure
+no2Trop, mol m-2, Tropospheric NO2 VCD including estimated ghost column (scdTrop/amfTrop)
+no2TropVis, mol m-2, Tropospheric NO2 VCD with only visible NO2 included (scdTrop/amfTropVis)
