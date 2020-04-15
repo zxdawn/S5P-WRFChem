@@ -31,7 +31,7 @@ import os
 import logging
 import pandas as pd
 from s5p_utils import *
-# from s5p_plots import *
+from s5p_plots import *
 from distributed import Client, LocalCluster
 
 logging.getLogger('satpy').setLevel(logging.ERROR)
@@ -46,6 +46,7 @@ def main():
     logging.info(cfg)
     overwrite = cfg.get('overwrite', 'True') == 'True'
     plot_weights = cfg.get('plot_weights', 'True') == 'True'
+    plot_regrid = cfg.get('plot_regrid', 'True') == 'True'
     plot_bamf = cfg.get('plot_bamf', 'True') == 'True'
     plot_interp = cfg.get('plot_interp', 'True') == 'True'
     # pres_levels = np.array([int(x) for x in cfg['pres_levels'].split(',')])
@@ -97,6 +98,10 @@ def main():
         logging.info('Plot weights_sparse and weights_heatmap')
         plot_weights_sparse(regridder, cfg['output_fig_dir'])
         plot_weights_heatmap(wrf, s5p, regridder, wrf_file, cfg['output_fig_dir'])
+
+    if plot_regrid:
+        logging.info('Plot regridded pressure')
+        plot_regrid_p(wrf, interp_ds, cfg['output_fig_dir'])
 
     if plot_interp:
         logging.info('Plot interpolated profile')

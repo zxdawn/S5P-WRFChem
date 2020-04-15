@@ -145,6 +145,48 @@ def plot_weights_heatmap(wrf, s5p, regridder, wrf_file, output_fig_dir):
     logging.info(f'Saving weights_heatmap to {output_name}')
     f.savefig(output_name)
 
+def plot_regrid_p(wrf, interp_ds, output_fig_dir):
+    '''Compare regridded pressure with original WRF pressure'''
+    # get variables
+    wrf_p = (wrf['P']+wrf['PB'])/100
+    regrid_p = interp_ds['p_wrf']
+
+    # subset to model domain
+    lon_min = wrf_p.lon.min()
+    lon_max = wrf_p.lon.max()
+    lat_min = wrf_p.lat.min()
+    lat_max = wrf_p.lat.max()
+    regrid_p = regrid_p.where((regrid_p.lon >= lon_min) &
+                              (regrid_p.lon <= lon_max) &
+                              (regrid_p.lat >= lat_min) &
+                              (regrid_p.lat <= lat_max),
+                              drop=True)
+
+    # set axis
+    f, axs = plot.subplots(nrows=1, ncols=2, share=0)
+    axs.format(abc=True, abcloc='l', abcstyle='a)')
+
+    # plot surface pressure
+    vmin = 950
+    vmax = 1000
+    wrf_p[0, ...].plot(ax=axs[0],
+                       vmin=vmin,
+                       vmax=vmax,
+                       cbar_kwargs={'label': '(hPa)'})
+    regrid_p[0, ...].plot(ax=axs[1],
+                          vmin=vmin,
+                          vmax=vmax,
+                          cbar_kwargs={'label': '(hPa)'})
+
+    # set title
+    axs[0].format(title='WRF pressure (hPa)')
+    axs[1].format(title='Regridded pressure (hPa)')
+
+    # save figure
+    output_name = os.path.join(output_fig_dir, 'comp_regrid.png')
+    logging.info(f'Saving comp_regrid to {output_name}')
+    f.savefig(output_name)
+
 def plot_interp_p(interp_ds, output_fig_dir):
     '''Compare the interpolated profiles with original simulated profiles'''
     # get the nonan indexes

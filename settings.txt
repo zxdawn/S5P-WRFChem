@@ -9,5 +9,6 @@ overwrite = False           ; whether overwrite the same generated files (True/F
 n_workers = 4               ; Dask: number of workers to start
 threads_per_worker = 1      ; Dask: number of threads per each worker
 plot_weights = False        ; whether plot the weights
+plot_regrid = False         ; whether plot the regridded surface pressure
 plot_bamf = False           ; whether plot the bamfs
 plot_interp = False         ; whether plot the interpolated profile
