@@ -314,10 +314,10 @@ def integPr(ds):
         (ds['tm5_pressure'] >= ds['tropopause_pressure'])
 
     # sum from surface (ground or cloud pressure) to tropopause
-    vcd = subcolumn.where(sub_layer[1, ...]).sum(layername, keepdims=True)
+    vcd = subcolumn.where(sub_layer[1:, ...]).sum(layername)
 
     # set 0 to nan
-    vcd = vcd.where(vcd > 0).squeeze(layername)
+    vcd = vcd.where(vcd > 0)
 
     logging.debug(' '*12 + 'Finish integration')
 
