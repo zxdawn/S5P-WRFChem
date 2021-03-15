@@ -29,15 +29,17 @@ def plot_weights_sparse(regridder, output_fig_dir):
     logging.info(f'Saving quicklook of weights to {output_name}')
     plt.savefig(output_name)
 
+
 def plot_weights_heatmap(wrf, s5p, regridder, wrf_file, output_fig_dir):
     '''Plot the heatmap of weights for one pixel'''
+
     # get the value of one pixel around the simulation center
     vcd = s5p['nitrogendioxide_tropospheric_column']
+
     # assign coords
     vcd = vcd.assign_coords(y=np.arange(vcd.shape[0]),
                             x=np.arange(vcd.shape[1]))
 
-    # select one pixel
     sel_pixel = vcd.where((vcd.longitude >
                            wrf.coords['lon'].mean()-0.1) &
                           (vcd.longitude <
@@ -57,6 +59,7 @@ def plot_weights_heatmap(wrf, s5p, regridder, wrf_file, output_fig_dir):
     # get the indices
     match_indice = np.where(np.isin(regridder.weights.row, pixel_indice))
     chem_indice = regridder.weights.col[match_indice]
+
     # get the x/y in chem grids
     chem_y, chem_x = np.unravel_index(chem_indice,
                                       (wrf['no2'].shape[1], wrf['no2'].shape[2])
@@ -74,17 +77,17 @@ def plot_weights_heatmap(wrf, s5p, regridder, wrf_file, output_fig_dir):
     f, ax = plot.subplots()
     ax.heatmap(df.columns, df.index,
                df*100, cmap='Blues',
-               vmin=0, vmax=4, N=100,
+               vmin=0, vmax=2, N=100,
                lw=0.5, edgecolor=None,
                labels=True,
                clip_on=False,
                colorbar='b',
-               colorbar_kw={'values': plot.arange(0, 4, 0.5),
+               colorbar_kw={'values': plot.arange(0, 2, 0.5),
+                            'ticks': 0.5,
                             'label': 'Weights (%)'},
+               labels_kw={'fontsize': 5},
                # labels_kw={'weight': 'bold'},
                )
-
-    # set axis format
     ax.format(alpha=0,
               linewidth=0,
               xticks=[],
@@ -107,31 +110,33 @@ def plot_weights_heatmap(wrf, s5p, regridder, wrf_file, output_fig_dir):
     x_y = np.stack((x_y[0], x_y[1]), axis=-1)
     x_y[[-2, -1]] = x_y[[-1, -2]]
 
-    # # seaborn version
-    # sns.set()
-    # f, ax = plt.subplots(figsize=(10, 8))
-    # sns.heatmap(df*100,
-    #             ax=ax,
-    #             cmap="Blues",
-    #             # annot_kws={"size": 15},
-    #             # cbar_kws={'label': 'weights (%)'},
-    #             annot=True, cbar=False,
-    #             xticklabels=False,
-    #             yticklabels=False)
-    # # add % text
-    # for t in ax.texts:
-    #     t.set_text(t.get_text() + " %")
-    # # bug of matplotlib_3.1.1:
-    # # https://stackoverflow.com/questions/56942670/
-    # #           matplotlib-seaborn-first-and-last-row-cut-in-half-of-heatmap-plot
-    # if matplotlib.__version__ == '3.1.1':
-    #     bottom, top = ax.get_ylim()
-    #     ax.set_ylim(bottom + 0.5, top - 0.5)
-    # pair together
-    #   we need to convert x/y (chem) to x/y relative to axis,
-    #   because the label is at the center, we need to modify values by 0.5
-    # x_y = np.stack((x_y[0]-chem_x.min()+0.5, x_y[1]-chem_y.min()+0.5), axis=-1)
-    # x_y[[-2, -1]] = x_y[[-1, -2]]
+    # seaborn version
+    '''
+    sns.set()
+    f, ax = plt.subplots(figsize=(10, 8))
+    sns.heatmap(df*100,
+                ax=ax,
+                cmap="Blues",
+                # annot_kws={"size": 15},
+                # cbar_kws={'label': 'weights (%)'},
+                annot=True, cbar=False,
+                xticklabels=False,
+                yticklabels=False)
+    # add % text
+    for t in ax.texts:
+        t.set_text(t.get_text() + " %")
+    # bug of matplotlib_3.1.1:
+    # https://stackoverflow.com/questions/56942670/
+    #           matplotlib-seaborn-first-and-last-row-cut-in-half-of-heatmap-plot
+    if matplotlib.__version__ == '3.1.1':
+        bottom, top = ax.get_ylim()
+        ax.set_ylim(bottom + 0.5, top - 0.5)
+    pair together
+      we need to convert x/y (chem) to x/y relative to axis,
+      because the label is at the center, we need to modify values by 0.5
+    x_y = np.stack((x_y[0]-chem_x.min()+0.5, x_y[1]-chem_y.min()+0.5), axis=-1)
+    x_y[[-2, -1]] = x_y[[-1, -2]]
+    '''
 
     # add polygon
     poly = Polygon(x_y,
@@ -145,102 +150,59 @@ def plot_weights_heatmap(wrf, s5p, regridder, wrf_file, output_fig_dir):
     logging.info(f'Saving weights_heatmap to {output_name}')
     f.savefig(output_name)
 
-def plot_regrid_p(wrf, interp_ds, output_fig_dir):
-    '''Compare regridded pressure with original WRF pressure'''
-    # get variables
-    wrf_p = (wrf['P']+wrf['PB'])/100
-    regrid_p = interp_ds['p_wrf']
 
-    # subset to model domain
-    lon_min = wrf_p.lon.min()
-    lon_max = wrf_p.lon.max()
-    lat_min = wrf_p.lat.min()
-    lat_max = wrf_p.lat.max()
-    regrid_p = regrid_p.where((regrid_p.lon >= lon_min) &
-                              (regrid_p.lon <= lon_max) &
-                              (regrid_p.lat >= lat_min) &
-                              (regrid_p.lat <= lat_max),
-                              drop=True)
+def plot_comp_s5p_chem(s5p, ds, output_fig_dir):
+    '''Plot the comparison between S5P TM5 and CHEM product'''
 
-    # set axis
-    f, axs = plot.subplots(nrows=1, ncols=2, share=0)
-    axs.format(abc=True, abcloc='l', abcstyle='a)')
+    # load data
+    s5p_amfClr = s5p['air_mass_factor_clear']
+    s5p_amfCld = s5p['air_mass_factor_cloudy']
+    amfClr = ds['scdClr'] / ds['vcdGnd']
+    amfCld = ds['scdCld'] / ds['vcdGnd']
 
-    # plot surface pressure
-    vmin = 950
-    vmax = 1000
-    wrf_p[0, ...].plot(ax=axs[0],
-                       vmin=vmin,
-                       vmax=vmax,
-                       cbar_kwargs={'label': '(hPa)'})
-    regrid_p[0, ...].plot(ax=axs[1],
-                          vmin=vmin,
-                          vmax=vmax,
-                          cbar_kwargs={'label': '(hPa)'})
+    # crop the data to data valid domain which usually is the wrfchem domain
+    valid = ~amfClr.isnull()
+    amfClr = amfClr.where(valid, drop=True)
+    amfCld = amfCld.where(valid, drop=True)
+    s5p_amfClr = s5p_amfClr.where(valid, drop=True)
+    s5p_amfCld = s5p_amfCld.where(valid, drop=True)
 
-    # set title
-    axs[0].format(title='WRF pressure (hPa)')
-    axs[1].format(title='Regridded pressure (hPa)')
+    # plot
+    f, axs = plot.subplots(nrows=3, ncols=2)
 
-    # save figure
-    output_name = os.path.join(output_fig_dir, 'comp_regrid.png')
-    logging.info(f'Saving comp_regrid to {output_name}')
-    f.savefig(output_name)
+    vmax = max(s5p_amfClr.max(), amfClr.max()).values
+    s5p_amfClr.plot(ax=axs[0], vmin=0, vmax=vmax)
+    amfClr.plot(ax=axs[1], vmin=0, vmax=vmax)
 
-def plot_interp_p(interp_ds, output_fig_dir):
-    '''Compare the interpolated profiles with original simulated profiles'''
-    # get the nonan indexes
-    # y = 191  # 190
-    # x = 312  # 316
+    vmax = max(s5p_amfCld.max(), amfCld.max()).values
+    s5p_amfCld.plot(ax=axs[2], vmin=0, vmax=vmax)
+    amfCld.plot(ax=axs[3], vmin=0, vmax=vmax)
 
-    subset = np.where(interp_ds['no2'].notnull())
-    # use the first one as the example
-    y = subset[1][0]
-    x = subset[2][0]
+    (s5p_amfClr/amfClr).plot(ax=axs[4], vmin=0)
+    (s5p_amfCld/amfCld).plot(ax=axs[5], vmin=0)
 
-    # set axis
-    f, axs = plot.subplots(ncols=2, spanx=0)
-    axs.format(abc=True, abcloc='l', abcstyle='a)')
-
-    # no2
-    h1 = axs[0].plot(interp_ds['no2'][:, y, x]*1e9,
-                     interp_ds['p'][:, y, x],
-                     label='TM5')
-    h2 = axs[0].plot(interp_ds['no2_wrf'][:, y, x]*1e9,
-                     interp_ds['p_wrf'][:, y, x],
-                     label='WRF')
-
-    axs[0].legend([h1, h2], loc='ur', frame=False)
-    axs[0].format(ylim=(1010, 50),
-                  xlim=(0, interp_ds['no2_wrf'][:, y, x].max()*1e9),
-                  xlabel='NO$_2$ (ppb)',
-                  ylabel='Pressure (hPa)')
-
-    # Temperature
-    h1 = axs[1].plot(interp_ds['tk'][:, y, x] - 273.15,
-                     interp_ds['p'][:, y, x],
-                     label='TM5')
-    h2 = axs[1].plot(interp_ds['tk_wrf'][:, y, x] - 273.15,
-                     interp_ds['p_wrf'][:, y, x],
-                     label='WRF')
-
-    axs[1].legend([h1, h2], loc='ur', frame=False)
-    axs[1].format(ylim=(1010, 50),
-                  xlim=(-80, 40),
-                  xlabel='Temperature ($^\circ$C)',
-                  ylabel='Pressure (hPa)')
+    axs[0].format(title='S5P AMFlr')
+    axs[1].format(title='CHEM AMFClr')
+    axs[2].format(title='S5P AMFCld')
+    axs[3].format(title='CHEM AMFCld')
+    axs[4].format(title='AMFClr (S5P/CHEM)')
+    axs[5].format(title='AMFCld (S5P/CHEM)')
 
     # save figure
-    output_name = os.path.join(output_fig_dir, 'interp_profile.png')
-    logging.info(f'Saving interp_profile to {output_name}')
+    output_name = os.path.join(output_fig_dir, 'comp_chem_tm5.png')
+    logging.info(f'Saving to {output_name}')
     f.savefig(output_name)
+
 
 def plot_bamf_p(bAmfClr, bAmfCld, output_fig_dir):
+    '''plot bAmf at each pressure level'''
     for p_index in range(bAmfClr.shape[0]):
         f, axs = plot.subplots(ncols=2)
         x, y = np.meshgrid(bAmfClr.x, bAmfClr.y)
-        axs[0].pcolormesh(y, x, bAmfClr[p_index, ...])
-        axs[1].pcolormesh(y, x, bAmfCld[p_index, ...])
+        m1 = axs[0].pcolormesh(y, x, bAmfClr[p_index, ...], levels=256)
+        m2 = axs[1].pcolormesh(y, x, bAmfCld[p_index, ...], levels=256)
+        axs[0].colorbar(m1, loc='r', label='bAmfClr')
+        axs[1].colorbar(m2, loc='r', label='bAmfCld')
 
         # save figure
         output_name = os.path.join(output_fig_dir, f'bAmf_layer{p_index}.png')
