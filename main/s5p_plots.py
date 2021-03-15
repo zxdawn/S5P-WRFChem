@@ -181,7 +181,7 @@ def plot_comp_s5p_chem(s5p, ds, output_fig_dir):
     (s5p_amfClr/amfClr).plot(ax=axs[4], vmin=0)
     (s5p_amfCld/amfCld).plot(ax=axs[5], vmin=0)
 
-    axs[0].format(title='S5P AMFlr')
+    axs[0].format(title='S5P AMFClr')
     axs[1].format(title='CHEM AMFClr')
     axs[2].format(title='S5P AMFCld')
     axs[3].format(title='CHEM AMFCld')
