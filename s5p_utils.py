@@ -6,6 +6,7 @@ UPDATE:
        03/31/2020: Basic
        04/01/2020: Add the interp part
        04/12/2020: Finish the AMF part
+       03/09/2021: Fix the AMF bug
 
 '''
 
@@ -33,7 +34,8 @@ def validation(cfg):
     validate_path(cfg['output_data_dir'], 'output_data_dir')
     validate_path(cfg['output_fig_dir'], 'output_fig_dir')
 
-def load_s5p(date_in, s5p_nc_dir):
+
+def load_s5p(date_in, s5p_nc_dir, tm5_prof):
     '''Load s5p data'''
     # get the s5p data by the datetime
     f_s5p_pattern = os.path.join(s5p_nc_dir, f'*{date_in.strftime("%Y%m%d")}*')
@@ -41,12 +43,14 @@ def load_s5p(date_in, s5p_nc_dir):
     logging.info(' '*4+f'Reading {f_s5p} ...')
     s5p = Scene(f_s5p, reader='tropomi_l2')
 
-    # print(s5p.available_dataset_names())
-    vnames = ['nitrogendioxide_tropospheric_column',
+    vnames = ['nitrogendioxide_slant_column_density',
+              'nitrogendioxide_stratospheric_column',
+              'nitrogendioxide_tropospheric_column',
+              'nitrogendioxide_ghost_column',
               'assembled_lat_bounds', 'assembled_lon_bounds',
               'latitude', 'longitude',
               'latitude_bounds', 'longitude_bounds',
-              'surface_albedo', 'surface_pressure',
+              'surface_albedo_nitrogendioxide_window', 'surface_pressure',
               'cloud_pressure_crb', 'cloud_albedo_crb',
               'cloud_fraction_crb_nitrogendioxide_window',
               'cloud_radiance_fraction_nitrogendioxide_window',
@@ -55,11 +59,18 @@ def load_s5p(date_in, s5p_nc_dir):
               'tm5_constant_a', 'tm5_constant_b',
               'tm5_tropopause_layer_index',
               'no2_scd_flag',  # only available for processed cloudy data
-              # 'offset_time', 'ref_time',
-              'time_utc',
-              'air_mass_factor_troposphere']
+              'time_utc', 'air_mass_factor_troposphere',
+              'air_mass_factor_clear', 'air_mass_factor_cloudy', 'amf_geo',
+              'air_mass_factor_stratosphere']
+
+    if tm5_prof:
+        # Read the TM5-MP a-priori profile
+        vnames.extend(['no2_vmr', 'temperature'])
+
     logging.debug(' '*4 + f'Reading vnames: {vnames}')
     s5p.load(vnames)
+    # another option: load all available variables
+    # s5p.load(s5p.all_dataset_names())
 
     # using pandas to convert string to timestamp, then to datetime without tz.
     mean_t = pd.to_datetime(s5p['time_utc'].values).mean() \
@@ -72,10 +83,12 @@ def load_s5p(date_in, s5p_nc_dir):
     a = s5p['tm5_constant_a']
     b = s5p['tm5_constant_b']
     psfc = s5p['surface_pressure']
-    # p_top in wrf-chem is around 50 hPa
-    #   we can just filter the lower pressure levels
+
     low_p = (a[:, 0] + b[:, 0]*psfc)/1e2
-    s5p['p'] = low_p.where(low_p >= 45, drop=True).rename('tm5_pressure')
+    high_p = (a[:, 1] + b[:, 1]*psfc)/1e2
+
+    s5p['p'] = xr.concat([low_p, high_p.isel(layer=-1)], dim='layer')
+    s5p['p'] = s5p['p'].rename('tm5_pressure')
     s5p['p'].attrs['units'] = 'hPa'
 
     # read lut
@@ -85,6 +98,7 @@ def load_s5p(date_in, s5p_nc_dir):
     logging.info(' '*8 + 'Finish reading')
 
     return s5p, vnames, lut, mean_t
+
 
 def load_wrf(date_in, wrf_nc_dir):
     '''Load wrf data
@@ -99,10 +113,10 @@ def load_wrf(date_in, wrf_nc_dir):
     f_wrf_pattern = os.path.join(wrf_nc_dir, date_in.strftime('wrfout_*_%Y-%m-%d_*'))
     wrf_list = glob.glob(f_wrf_pattern)
 
-    # omit the directory and get "yyyy-mm-dd_hh-mm-ss"
+    # omit the directory and get "yyyy-mm-dd_hh:mm:ss"
     wrf_dates = [datetime.strptime(
                             ntpath.basename(name).split('_', maxsplit=2)[-1],
-                            '%Y-%m-%d_%H-%M-%S')
+                            '%Y-%m-%d_%H:%M:%S')
                  for name in wrf_list]
 
     # get the index of the closest datetime
@@ -143,71 +157,84 @@ def load_wrf(date_in, wrf_nc_dir):
 
     return wrf_file, wrf
 
-def add_matrix_NaNs(regridder):
-    '''Deal with wrong boundary'''
-    X = regridder.weights
-    M = scipy.sparse.csr_matrix(X)
-    num_nonzeros = np.diff(M.indptr)
-    M[num_nonzeros == 0, 0] = np.NaN
-    regridder.weights = scipy.sparse.coo_matrix(M)
 
-    return regridder
-
-def regrid(wrf, s5p):
+def regrid(wrf, s5p, tm5_prof):
     '''Get bounds and regrid data to s5p pixels
 
-    Currently, the boundary is wrong:
+    Currently, the boundary for WRF-Chem option is wrong:
         https://github.com/JiaweiZhuang/xESMF/issues/17
 
     Temporary solution:
         https://github.com/JiaweiZhuang/xESMF/issues/15
         https://github.com/JiaweiZhuang/xESMF/issues/22
-
     '''
 
-    logging.info(' '*4 + 'Regridding WRF-Chem data to pixels ...')
+    if tm5_prof:
+        logging.info(' '*4 + 'Regridding TM5 data directly ...')
+        interp_ds = xr.Dataset({
+                                'no2': s5p['no2_vmr'].transpose('layer',
+                                                                ...,
+                                                                transpose_coords=False),
+                                'tk': s5p['temperature'].transpose('layer',
+                                                                   ...,
+                                                                   transpose_coords=False),
+                               })
 
-    # create bounds of wrf and s5p
-    wrf_bounds = {'lon': wrf.lon,
-                  'lat': wrf.lat,
-                  'lon_b': wrf.lon_b,
-                  'lat_b': wrf.lat_b,
-                  }
+        regridder = None
 
-    s5p_bounds = {'lon': s5p['longitude'],
-                  'lat': s5p['latitude'],
-                  'lon_b': s5p['assembled_lon_bounds'],
-                  'lat_b': s5p['assembled_lat_bounds'],
-                  }
+    else:
+        logging.info(' '*4 + 'Regridding WRF-Chem data to pixels ...')
 
-    # create regridder
-    # regrid_method = 'conservative'
-    regrid_method = 'bilinear'
-    regridder = xe.Regridder(wrf_bounds, s5p_bounds,
-                             regrid_method,
-                             # filename=f'{regrid_method}_wrf_s5p.nc',
-                             reuse_weights=True)
-    # regridder = add_matrix_NaNs(regridder)
+        # create bounds of wrf and s5p
+        wrf_bounds = {'lon': wrf.lon,
+                      'lat': wrf.lat,
+                      'lon_b': wrf.lon_b,
+                      'lat_b': wrf.lat_b,
+                      }
 
-    # apply regridder
-    regrid_vars = {'no2': regridder(wrf['no2'])/1e6,  # ppm --> ppp
-                   'tk': regridder(wrf['T']),
-                   'p': regridder(wrf['P']+wrf['PB'])/100,  # hPa
-                   }
+        s5p_bounds = {'lon': s5p['longitude'],
+                      'lat': s5p['latitude'],
+                      'lon_b': s5p['assembled_lon_bounds'],
+                      'lat_b': s5p['assembled_lat_bounds'],
+                      }
 
-    # set 0 to nan in regridded variables
-    #   as no simulation data is available for these pixels
-    for key in regrid_vars:
-        regrid_vars[key] = regrid_vars[key].where(regrid_vars[key] > 0)
+        # create regridder
+        regrid_method = 'conservative_normed'
+        regridder = xe.Regridder(wrf_bounds, s5p_bounds,
+                                 regrid_method,
+                                 # filename=f'{regrid_method}_wrf_s5p.nc',
+                                 # reuse_weights=True,
+                                 )
 
-    logging.info(' '*8 + 'Finish Regridding')
+        # apply regridder
+        if 'no' in wrf.keys():
+            # NO is for the retrieval of LNOx
+            # It's fine if you don't care about the LNOx
+            regrid_vars = {'no2': regridder(wrf['no2'])/1e6,  # ppm --> ppp
+                           'no': regridder(wrf['no'])/1e6,  # ppm --> ppp
+                           'tk': regridder(wrf['T']),
+                           'p': regridder(wrf['P']+wrf['PB'])/100,  # hPa
+                           }
+        else:
+            regrid_vars = {'no2': regridder(wrf['no2'])/1e6,  # ppm --> ppp
+                           'tk': regridder(wrf['T']),
+                           'p': regridder(wrf['P']+wrf['PB'])/100,  # hPa
+                           }
 
-    # save to Dataset
-    interp_ds = interp_to_tm5(regrid_vars, s5p)
+        # set 0 to nan in regridded variables
+        #   as no simulation data is available for these pixels
+        for key in regrid_vars:
+            regrid_vars[key] = regrid_vars[key].where(regrid_vars[key] > 0)
+
+        logging.info(' '*8 + 'Finish Regridding')
+
+        # save to Dataset
+        interp_ds = interp_to_tm5(regrid_vars, s5p)
 
     return regridder, interp_ds
 
-def cal_bamf(s5p, lut, interp_ds):
+
+def cal_bamf(s5p, lut):
     '''Calculate the Box-AMFs based on the LUT file
 
     Args:
@@ -228,62 +255,68 @@ def cal_bamf(s5p, lut, interp_ds):
     new_dim = ['y', 'x']
 
     # get vars from s5p data
-    albedo = xr.DataArray(s5p['surface_albedo'],
+    albedo = xr.DataArray(s5p['surface_albedo_nitrogendioxide_window'],
                           dims=new_dim)
     cloud_albedo = xr.DataArray(s5p['cloud_albedo_crb'],
                                 dims=new_dim)
+
     # use surface pressure from TROPOMI (input from ERA-Interim)
     p_surface = xr.DataArray(s5p['surface_pressure']/1e2,  # hPa
                              dims=new_dim)
     p_cloud = xr.DataArray(s5p['cloud_pressure_crb']/1e2,  # hPa
                            dims=new_dim)
-    dphi = xr.DataArray(cal_rza(s5p['solar_azimuth_angle'],
-                                s5p['viewing_azimuth_angle']),
+
+    # calculate angles
+    dphi = xr.DataArray(cal_dphi(s5p['solar_azimuth_angle'],
+                                 s5p['viewing_azimuth_angle']),
                         dims=new_dim)
     mu0 = xr.DataArray(np.cos(np.deg2rad(s5p['solar_zenith_angle'])),
                        dims=new_dim)
     mu = xr.DataArray(np.cos(np.deg2rad(s5p['viewing_zenith_angle'])),
                       dims=new_dim)
 
-    # # check the data is in the threshold
-    # logging.debug(lut.albedo, '\n', '*'*10, albedo)
-    # logging.debug(lut.cloud_albedo, '\n', '*'*10, cloud_albedo)
-    # logging.debug(lut.p_surface, '\n', '*'*10, p_surface)
-    # logging.debug(lut.p_cloud, '\n', '*'*10, p_cloud)
-    # logging.debug(lut.dphi, '\n', '*'*10, dphi)
-    # logging.debug(lut.mu0, '\n', '*'*10, mu0)
-    # logging.debug(lut.mu, '\n', '*'*10, mu)
+    da = lut['amf'].assign_coords(p=np.log(lut['amf'].p), p_surface=np.log(lut['amf'].p_surface))
+    # da = da.where(da>0)
 
     # interpolate data by 2d arrays
-    # https://github.com/pydata/xarray/pull/3924
-    bAmfClr_p = lut['amf'].interp(albedo=albedo,
-                                  p_surface=p_surface,
-                                  dphi=dphi,
-                                  mu0=mu0,
-                                  mu=mu,
-                                  )
+    '''
+    if you meet "KeyError: nan", see the method below:
+        although xarray >= 0.16.1 fix this issue,
+        regrid_dataset broken with xarray=0.16.1
+            (https://github.com/pangeo-data/xESMF/pull/47)
+        so, check https://github.com/pydata/xarray/pull/3924
+            and edit the xarray/core/missing.py file by yourself
+    '''
+    bAmfClr_p = da.interp(albedo=albedo,
+                          p_surface=np.log(p_surface),
+                          dphi=dphi,
+                          mu0=mu0,
+                          mu=mu)
 
-    bAmfCld_p = lut['amf'].interp(albedo=cloud_albedo,
-                                  p_surface=p_cloud,
-                                  dphi=dphi,
-                                  mu0=mu0,
-                                  mu=mu,
-                                  )
+    bAmfCld_p = da.interp(albedo=cloud_albedo,
+                          p_surface=np.log(p_cloud),
+                          dphi=dphi,
+                          mu0=mu0,
+                          mu=mu)
 
     # interpolate to TM5 pressure levels
     bAmfClr = xr_interp(bAmfClr_p,
                         bAmfClr_p.coords['p'], 'p',
-                        s5p['p'].load(), 'layer').transpose(
+                        np.log(s5p['p'].rolling({'layer': 2}).mean()[1:, ...].load()), 'layer').transpose(
                         'layer',
                         ...,
                         transpose_coords=False)
 
     bAmfCld = xr_interp(bAmfCld_p,
                         bAmfCld_p.coords['p'], 'p',
-                        s5p['p'].load(), 'layer').transpose(
+                        np.log(s5p['p'].rolling({'layer': 2}).mean()[1:, ...].load()), 'layer').transpose(
                         'layer',
                         ...,
                         transpose_coords=False)
+
+    # because the bAMF is normalized by amf_geo in the LUT file, we need to multiply bAMFs by amf_geo
+    bAmfClr *= s5p['amf_geo']
+    bAmfCld *= s5p['amf_geo']
 
     # convert s5p['p'] to dask array
     s5p['p'] = s5p['p'].chunk({'layer': s5p['p'].shape[0],
@@ -292,9 +325,10 @@ def cal_bamf(s5p, lut, interp_ds):
 
     logging.info(' '*8 + 'Finish calculating box-AMFs')
 
-    return bAmfClr, bAmfCld
+    return bAmfClr, bAmfCld, [albedo, p_surface, cloud_albedo, p_cloud, dphi, mu0, mu]
 
-def cal_amf(s5p, interp_ds, bAmfClr, bAmfCld):
+
+def cal_amf(s5p, interp_ds, bAmfClr, bAmfCld, del_lut):
     '''Calculate AMFs'''
     logging.info(' '*4 + 'Calculating AMFs based on box-AMFs ...')
 
@@ -302,15 +336,13 @@ def cal_amf(s5p, interp_ds, bAmfClr, bAmfCld):
     no2 = interp_ds['no2']
     tk = interp_ds['tk']
 
+    # for LNOx research
+    if 'no' in interp_ds.keys():
+        no = interp_ds['no']
+
     # the temperature correction factor, see TROPOMI ATBD file
     ts = 220  # temperature of cross-section [K]
     factor = 1 - 0.00316*(tk-ts) + 3.39e-6*(tk-ts)**2
-
-    # get the scattering weights
-    bAmfClr = bAmfClr * factor
-    bAmfCld = bAmfCld * factor
-    clearSW = no2 * bAmfClr
-    cloudySW = no2 * bAmfCld
 
     # load variables
     psfc = s5p['surface_pressure'] / 1e2  # hPa
@@ -325,48 +357,60 @@ def cal_amf(s5p, interp_ds, bAmfClr, bAmfCld):
     psfc.attrs['units'] = 'hPa'
     pcld.attrs['units'] = 'hPa'
 
-    # concatenate cloud pressures and tm5 pressures
-    s5p_pcld = concat_p(pcld, s5p_pclr)
+    # concatenate surface pressures, cloud pressures and tm5 pressures
+    s5p_pcld = concat_p([psfc, pcld], s5p_pclr)
+
+    # get the scattering weights
+    bAmfClr = bAmfClr * factor
+    bAmfCld = bAmfCld * factor
 
     # interpolate profiles to pressure levels including cloud pressure
-    no2Cld = interp_to_cld(no2, s5p_pclr, s5p_pcld)
-    bAmfClr = interp_to_cld(bAmfClr, s5p_pclr, s5p_pcld)
-    bAmfCld = interp_to_cld(bAmfCld, s5p_pclr, s5p_pcld)
-    cloudySW = interp_to_cld(cloudySW, s5p_pclr, s5p_pcld)
+    no2 = interp_to_layer(no2, s5p_pclr, s5p_pcld)
+    bAmfClr = interp_to_layer(bAmfClr, s5p_pclr, s5p_pcld)
+    bAmfCld = interp_to_layer(bAmfCld, s5p_pclr, s5p_pcld)
+    clearSW = no2 * bAmfClr
+    cloudySW = no2 * bAmfCld
 
-    # combine DataArrays
-    ds_vcdClr = merge_da(no2, s5p_pclr, psfc, ptropo)
-    ds_vcdCld = merge_da(no2Cld, s5p_pcld, pcld, ptropo)
-    ds_scdClr = merge_da(clearSW, s5p_pclr, psfc, ptropo)
-    ds_scdCld = merge_da(cloudySW, s5p_pcld, pcld, ptropo)
+    # for LNOx research
+    if 'no' in interp_ds.keys():
+        no = interp_to_layer(no, s5p_pclr, s5p_pcld).rename('noapriori')
+
+    # logging.info(' '*6 + 'Calculating ghost column ...')
+    # ghost = integPr(no2, s5p_pcld, psfc, pcld.rename('tropopause_pressure')).rename('ghost_column')
+
+    # integrate from surface pressure to tropopause
+    logging.info(' '*6 + 'Calculating vcdGnd ...')
+    vcdGnd = integPr(no2, s5p_pcld, psfc, ptropo).rename('vcdGnd')
 
     # integrate from cloud pressure to tropopause
-    logging.info(' '*6 + 'Calculating vcdGnd ...')
-    vcdGnd = integPr(ds_vcdClr).rename('vcdGnd')
-
     logging.info(' '*6 + 'Calculating vcdCld ...')
-    vcdCld = integPr(ds_vcdCld).rename('vcdCld')
+    vcdCld = integPr(no2, s5p_pcld, pcld, ptropo).rename('vcdCld')
+
+    # for LNOx research
+    if 'no' in interp_ds.keys():
+        logging.info(' '*6 + 'Calculating vcdGnd_no ...')
+        vcdGnd_no = integPr(no, s5p_pcld, psfc, ptropo).rename('vcdGnd_no')
 
     logging.info(' '*6 + 'Calculating scdClr ...')
-    scdClr = integPr(ds_scdClr).rename('scdClr')
+    scdClr = integPr(clearSW, s5p_pcld, psfc, ptropo).rename('scdClr')
 
     logging.info(' '*6 + 'Calculating scdCld ...')
-    scdCld = integPr(ds_scdCld).rename('scdCld')
+    scdCld = integPr(cloudySW, s5p_pcld, pcld, ptropo).rename('scdCld')
 
-    # set Cld DataArays to nan again for "clear" pixels
-    cld_pixels = (cf > 0) & (crf > 0) & (pcld > ptropo)
-    vcdCld = vcdCld.where(cld_pixels, 0)
-    scdCld = scdCld.where(cld_pixels, 0)
+    # #set Cld DataArays to nan again for "clear" pixels
+    # cld_pixels = (cf > 0) & (crf > 0) & (pcld > ptropo)
+    # vcdCld = vcdCld.where(cld_pixels, 0)
+    # scdCld = scdCld.where(cld_pixels, 0)
 
     # calculate AMFs
     logging.info(' '*6 + 'Calculating amfClr ...')
     amfClr = scdClr / vcdGnd
     # https://github.com/pydata/xarray/issues/2283
-    amfClr = amfClr.where((crf != 1) & (cf != 1), 0)
+    # amfClr = amfClr.where((crf != 1) & (cf != 1), 0)
 
     logging.info(' '*6 + 'Calculating amfCld ...')
     amfCld = scdCld / vcdGnd
-    amfCld = amfCld.where(cld_pixels, 0)
+    # amfCld = amfCld.where(cld_pixels, 0)
 
     logging.info(' '*6 + 'Calculating amf and amfVis ...')
     amf = amfCld*crf + amfClr*(1-crf)
@@ -374,8 +418,8 @@ def cal_amf(s5p, interp_ds, bAmfClr, bAmfCld):
 
     # calculate averaging kernel
     logging.info(' '*6 + 'Calculating averaging kernel ...')
-    bAmfCld = bAmfCld.where((s5p_pcld < ptropo), 0)
-    sc_weights = bAmfCld*crf + bAmfClr*(1-crf)
+    sc_weights = crf*bAmfCld.where((s5p_pcld.rolling({s5p_pcld.dims[0]: 2}).mean()[1:, ...] < ptropo), 0) \
+        + (1-crf)*bAmfClr
     avgKernel = sc_weights / amf
 
     # calculate vertical column densities
@@ -389,7 +433,7 @@ def cal_amf(s5p, interp_ds, bAmfClr, bAmfCld):
     bAmfClr = bAmfClr.rename('swClr')
     bAmfCld = bAmfCld.rename('swCld')
     avgKernel = avgKernel.rename('avgKernel')
-    no2Cld = no2Cld.rename('no2apriori')
+    no2 = no2.rename('no2apriori')
     s5p_pcld = s5p_pcld.rename('plevels')
     no2Trop = no2Trop.rename('no2Trop')
     no2TropVis = no2Trop.rename('no2TropVis')
@@ -402,9 +446,15 @@ def cal_amf(s5p, interp_ds, bAmfClr, bAmfCld):
 
     # drop useless coordinates and assign attributes
     da_list = []
-    for da in [amf, amfVis, bAmfClr, bAmfCld, avgKernel,
-               no2Cld, s5p_pcld, ptropo,
-               no2Trop, no2TropVis]:
+    saved_da = [amf, amfVis, bAmfClr, bAmfCld, avgKernel,
+                no2, no2Trop, no2TropVis,
+                scdClr, scdCld, vcdGnd,
+                ptropo, s5p_pcld.isel(plevel=slice(None, -1))]
+
+    if 'no' in interp_ds.keys():
+        saved_da.extend([no, vcdGnd_no])
+
+    for da in saved_da:
         da_list.append(assign_attrs(da.drop(list(da.coords)), df_attrs))
 
     # merge to one Dataset
@@ -412,35 +462,43 @@ def cal_amf(s5p, interp_ds, bAmfClr, bAmfCld):
 
     return ds
 
-def save(s5p, wrf, ds, vnames, output_file):
+
+def save(s5p, wrf, ds, vnames, output_file, tm5_prof):
     '''Save data to nc files'''
     # it is better to load before save to netcdf
     # https://github.com/pydata/xarray/issues/2912
 
-    # # set global attributes
-    # header_attrs = {'wrfchem_filename': wrf.attrs['wrfchem_filename'],
-    #                 's5p_filename': s5p.attrs['s5p_filename'],
-    #                 }
+    # set global attributes
+    header_attrs = {'wrfchem_filename': wrf.attrs['wrfchem_filename'],
+                    's5p_filename': s5p.attrs['s5p_filename'],
+                    }
 
-    # # set compression
-    # comp = dict(zlib=True, complevel=9)
+    # set compression
+    comp = dict(zlib=True, complevel=9)
 
-    # # save loaded s5p data
-    # logging.info(' '*4 + f'Saving to {output_file}')
-    # s5p.save_datasets(filename=output_file,
-    #                   datasets=vnames,
-    #                   groups={'S5P': vnames},
-    #                   compute=True,
-    #                   header_attrs=header_attrs,
-    #                   writer='cf',
-    #                   engine='netcdf4',
-    #                   compression=comp,
-    #                   )
+    # save loaded s5p data
+    logging.info(' '*4 + f'Saving to {output_file}')
 
-    # # save retrieved data
-    # encoding = {var: comp for var in ds.data_vars}
-    # ds.load().to_netcdf(path=output_file,
-    #                     mode='a',
-    #                     engine='netcdf4',
-    #                     group='CHEM',
-    #                     encoding=encoding)
+    s5p.save_datasets(filename=output_file,
+                      datasets=vnames,
+                      groups={'S5P': vnames},
+                      compute=True,
+                      header_attrs=header_attrs,
+                      writer='cf',
+                      engine='netcdf4',
+                      compression=comp,
+                      )
+
+    # save data into different groups
+    if tm5_prof:
+        group_name = 'TM5'
+    else:
+        group_name = 'CHEM'
+
+    # save to one netcdf file
+    encoding = {var: comp for var in ds.data_vars}
+    ds.load().to_netcdf(path=output_file,
+                        mode='a',
+                        engine='netcdf4',
+                        group=group_name,
+                        encoding=encoding)
