@@ -2,10 +2,10 @@ name: s5p-wrfchem
 channels:
   - conda-forge
 dependencies:
-  - python>=3.7
+  - python>=3.8
   # base
   - numpy
-  - matplotlib
+  - matplotlib=3.3.4
   - pandas
   - scipy
   - configparser
@@ -21,5 +21,5 @@ dependencies:
   - xesmf
   - xgcm
   # others
-  - satpy
+  - satpy>=0.27.0
   - wrf-python
