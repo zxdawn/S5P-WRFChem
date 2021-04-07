@@ -58,6 +58,7 @@ def load_s5p(date_in, s5p_nc_dir, tm5_prof):
               'solar_zenith_angle', 'viewing_zenith_angle',
               'tm5_constant_a', 'tm5_constant_b',
               'tm5_tropopause_layer_index',
+              'qa_value',
               'no2_scd_flag',  # only available for processed cloudy data
               'time_utc', 'air_mass_factor_troposphere',
               'air_mass_factor_clear', 'air_mass_factor_cloudy', 'amf_geo',
