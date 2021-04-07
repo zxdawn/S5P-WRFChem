@@ -34,7 +34,7 @@ To enable the specific plot, please modify options in the `settings.txt` file.
 
 ## 4.2 External Examples
 
-Other complicated applications are saved in another repository called [S5P-WRFChem-notebook](https://github.com/zxdawn/s5p-wrfchem-notebook).
+Other complicated applications are saved in another repository called [S5P-WRFChem-Notebook](https://github.com/zxdawn/S5P-WRFChem-Notebook).
 
 
 

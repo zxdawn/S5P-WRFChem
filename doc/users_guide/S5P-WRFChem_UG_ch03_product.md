@@ -8,7 +8,7 @@
 
 ## 3.1 Product types
 
-Currently, we have two data products available: one using the WRF-Chem NO2 profile and another using the TM5 profile. Both of them are at the native TROPOMI pixel resolution. Usually, users should care about the first type. If the user want to check some specific improvements, the second one would be useful as the reference.
+Currently, we have two data products available: one using the WRF-Chem NO<sub>2</sub> profile and another using the TM5 profile. Both of them are at the native TROPOMI pixel resolution. Usually, users should care about the first type. If the user want to check some specific improvements, the second one would be useful as the reference data.
 
 ## 3.2 Version Scheme
 
@@ -25,7 +25,7 @@ TM5 product:
 
 ## 3.3 File format
 
-The generated outputs use the same format as the official NetCDF files.
+The generated output files use the same format as the official NetCDF files.
 
 The `/S5P` group contains loaded official variables as DataArrays, while the `/CHEM` or `/TM5` group includes the re-retrieved variables.
 
@@ -36,7 +36,7 @@ The `/S5P` group contains loaded official variables as DataArrays, while the `/C
 
 ## 3.4 Variables
 
-The Table below list the attributes of all variables found in the S5P-WRFChem files. Product indicates whether the variable is directly copied from the TROPOMI product (`S5P`), or calculated from S5P-WRFChem (`CHEM/TM5`).
+The Table below list the attributes of all variables found in the S5P-WRFChem files. Product indicates whether the variable is directly copied from the TROPOMI product (`/S5P`), or calculated from S5P-WRFChem (`/CHEM` or `/TM5`).
 
 | Varname                                        | Product  | Units                                                        | Description                                                  |
 | ---------------------------------------------- | -------- | ------------------------------------------------------------ | ------------------------------------------------------------ |
@@ -91,7 +91,9 @@ The Table below list the attributes of all variables found in the S5P-WRFChem fi
 
 As we don't generate new flags for our products, users should stick with the flags in the `S5P` group.
 
-Two flags are available after version 2: 1) *qa_value* (f<sub>QA</sub>) and 2) *no2_scd_flag*.
+Two flags are available after version 2:
+
+​	1) *qa_value* (f<sub>QA</sub>) and 2) *no2_scd_flag*.
 
 Brief explanations are copied here:
 

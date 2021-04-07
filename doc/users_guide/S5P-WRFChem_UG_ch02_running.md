@@ -44,7 +44,7 @@ S5P-WRFChem is a simple retrieval tool written in Python. S5P-WRFChem execution 
 
 - [SCIHUB](https://scihub.copernicus.eu/)
 
-  This is the link on the official [TROPOMI website](http://www.tropomi.eu/data-products/nitrogen-dioxide). It's convenient to download selected data using **browser** and DownThemAll plugin.
+  This is the link provided by the official [TROPOMI website](http://www.tropomi.eu/data-products/nitrogen-dioxide). It's convenient to download selected data using **browser** and DownThemAll plugin.
 
 - [GES DISC](https://daac.gsfc.nasa.gov/?)
 
@@ -58,11 +58,11 @@ S5P-WRFChem is a simple retrieval tool written in Python. S5P-WRFChem execution 
 
 ### WRF-Chem
 
-The [WRF-Chem website](https://www2.acom.ucar.edu/wrf-chem) has provided the detailed User guide and the retrieval algorithm supports wrf output files of all versions.
+The [WRF-Chem website](https://www2.acom.ucar.edu/wrf-chem) has provided the detailed User guide. The S5P-WRFChem retrieval algorithm supports wrf output files of all versions.
 
 Note that you need to modify `frames_per_outfile` to `1` in `namelist.input` for the domain which is used for the retrieval. This will generate one file every `history_interval`.
 
-**Put the TROPOMI and WRF-Chem data in the directories set by `setting.txt` in the `main` directory.**
+**Then, put the TROPOMI and WRF-Chem data in the directories set by `setting.txt` in the `main` directory.**
 
 ## 2.4 Retrieval
 

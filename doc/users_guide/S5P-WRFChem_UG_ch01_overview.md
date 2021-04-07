@@ -13,7 +13,7 @@ If you want to contribute to S5P-WRFChem, add your name to the [AUTHOR list](htt
 
 ## 1.2 Literatures
 
-The following are papers using S5P-WRFChem algorithm:
+Papers using S5P-WRFChem algorithm:
 
 - Coming soon ...
 
