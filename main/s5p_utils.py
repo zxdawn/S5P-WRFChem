@@ -288,13 +288,13 @@ def cal_bamf(s5p, lut):
         so, check https://github.com/pydata/xarray/pull/3924
             and edit the xarray/core/missing.py file by yourself
     '''
-    bAmfClr_p = da.interp(albedo=albedo,
+    bAmfClr_p = da.interp(albedo=albedo.clip(0,1),
                           p_surface=np.log(p_surface),
                           dphi=dphi,
                           mu0=mu0,
                           mu=mu)
 
-    bAmfCld_p = da.interp(albedo=cloud_albedo,
+    bAmfCld_p = da.interp(albedo=cloud_albedo.clip(0,1),
                           p_surface=np.log(p_cloud),
                           dphi=dphi,
                           mu0=mu0,
