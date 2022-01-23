@@ -57,7 +57,7 @@ def load_s5p(date_in, s5p_nc_dir, tm5_prof=False):
               'solar_zenith_angle', 'viewing_zenith_angle',
               'tm5_constant_a', 'tm5_constant_b',
               'tm5_tropopause_layer_index',
-              'qa_value',
+              'qa_value', 'processing_quality_flags',
               'no2_scd_flag',  # only available for processed cloudy data
               'time_utc', 'air_mass_factor_troposphere',
               'air_mass_factor_clear', 'air_mass_factor_cloudy', 'amf_geo',
@@ -67,10 +67,14 @@ def load_s5p(date_in, s5p_nc_dir, tm5_prof=False):
         # Read the TM5-MP a-priori profile
         vnames.extend(['no2_vmr', 'temperature'])
 
-    logging.debug(' '*4 + f'Reading vnames: {vnames}')
-    s5p.load(vnames)
-    # another option: load all available variables
-    # s5p.load(s5p.all_dataset_names())
+    try:
+        s5p.load(vnames)
+    except:
+        vnames.remove('no2_scd_flag')
+        s5p.load(vnames)
+        # another option: load all available variables
+        # s5p.load(s5p.all_dataset_names())
+    logging.debug(' '*4 + f'Loaded vnames: {vnames}')
 
     # using pandas to convert string to timestamp, then to datetime without tz.
     mean_t = pd.to_datetime(s5p['time_utc'].values).mean() \
