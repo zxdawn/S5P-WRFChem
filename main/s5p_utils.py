@@ -34,7 +34,7 @@ def validation(cfg):
     validate_path(cfg['output_fig_dir'], 'output_fig_dir')
 
 
-def load_s5p(date_in, s5p_nc_dir, tm5_prof):
+def load_s5p(date_in, s5p_nc_dir, tm5_prof=False):
     '''Load s5p data'''
     # get the s5p data by the datetime
     f_s5p_pattern = os.path.join(s5p_nc_dir, f'*{date_in.strftime("%Y%m%d")}*')
@@ -158,7 +158,37 @@ def load_wrf(date_in, wrf_nc_dir):
     return wrf_file, wrf
 
 
-def regrid(wrf, s5p, tm5_prof):
+def add_time_dim(da):
+    '''Add the time dimension by filename'''
+    time = datetime.strptime(ntpath.basename(da.encoding['source']).split('_', maxsplit=3)[-1],
+                             '%Y-%m-%d_%H:%M:%S')
+    da = da.assign_coords(Time=[time])
+
+    return da
+
+
+def load_irr(date_in, wrf_nc_dir):
+    '''Load wrf IRR data
+
+    Because loading large files could cost much time,
+    please use "frames_per_outfile=1" in "namelist.input"
+    to generate wrfout* files.
+
+    '''
+
+    # get all wrf output files in the same day
+    f_irr_pattern = os.path.join(wrf_nc_dir, date_in.strftime('IRR_DIAG_*_%Y-%m-%d_*'))
+    irr_list = glob.glob(f_irr_pattern)
+    irr_list.sort()
+
+    # read selected IRR data
+    logging.info(' '*4 + f'Reading {irr_list} ...')
+    irr = xr.open_mfdataset(irr_list, combine='nested', concat_dim='Time', preprocess = add_time_dim)
+
+    return irr
+
+
+def regrid(wrf, s5p, tm5_prof=False):
     '''Get bounds and regrid data to s5p pixels
 
     Currently, the boundary for WRF-Chem option is wrong:
@@ -232,6 +262,59 @@ def regrid(wrf, s5p, tm5_prof):
         interp_ds = interp_to_tm5(regrid_vars, s5p)
 
     return regridder, interp_ds
+
+
+def regrid_irr(irr, wrf, s5p):
+    logging.info(' '*4 + 'Regridding WRF-Chem IRR data to pixels ...')
+
+    # create bounds of wrf and s5p
+    wrf_bounds = {'lon': wrf.lon,
+                  'lat': wrf.lat,
+                  'lon_b': wrf.lon_b,
+                  'lat_b': wrf.lat_b,
+                  }
+
+    s5p_bounds = {'lon': s5p['longitude'],
+                  'lat': s5p['latitude'],
+                  'lon_b': s5p['assembled_lon_bounds'],
+                  'lat_b': s5p['assembled_lat_bounds'],
+                    }
+
+    # create regridder
+    regrid_method = 'conservative_normed'
+    regridder = xe.Regridder(wrf_bounds, s5p_bounds, regrid_method)
+
+    # apply regridder
+    p_wrf = (wrf['P']+wrf['PB'])/100
+    regrid_vars = {'p': regridder(p_wrf)}  # hPa
+
+    # constants
+    NA = 6.022e23
+    R = 8.314
+
+    for varname in irr.keys():
+        if 'IRR' in varname:
+            value = irr[varname]* p_wrf * NA / (R*wrf['T']) * 1e-10  # ppmv --> molec. cm-3
+
+            # drop useless coordinates because lon and lat are enough
+            value = value.drop_vars(['south_north', 'west_east', 'XTIME'])
+
+            regrid_vars.update({varname: regridder(value)})
+
+    # set 0 to nan in regridded variables
+    #   as no simulation data is available for these pixels
+    for key in regrid_vars:
+        regrid_vars[key] = regrid_vars[key].where(regrid_vars[key] > 0)
+
+    logging.info(' '*8 + 'Finish Regridding')
+
+    # save to Dataset
+    interp_ds = interp_to_tm5(regrid_vars, s5p)#.expand_dims('Time')
+
+    # drop useless coordinates
+    interp_ds = interp_ds.drop_vars(['XTIME', 'crs', 'longitude', 'latitude'])
+
+    return interp_ds
 
 
 def cal_bamf(s5p, lut):
@@ -509,3 +592,36 @@ def save(s5p, wrf, ds, vnames, output_file, tm5_prof):
                         engine='netcdf4',
                         group=group_name,
                         encoding=encoding)
+
+
+def save_irr(s5p, da, output_file):
+    # set global attributes
+    header_attrs = {'s5p_filename': s5p.attrs['s5p_filename']}
+
+    # add attributes "units"
+    da.attrs['units'] = 'molec. cm$^{-3}$ s$^{-1}$'
+
+    # set compression
+    comp = dict(zlib=True, complevel=9)
+
+    # save loaded s5p data
+    logging.info(' '*4 + f'Saving to {output_file}')
+
+    vnames_s5p = ['p', 'longitude', 'latitude', 'assembled_lat_bounds', 'assembled_lon_bounds']
+    s5p.save_datasets(filename=output_file,
+                      datasets=vnames_s5p,
+                      groups={'S5P': vnames_s5p},
+                      compute=True,
+                      header_attrs=header_attrs,
+                      writer='cf',
+                      engine='netcdf4',
+                      compression=comp,
+                      )
+
+    # save to one netcdf file
+    encoding = {'IRR': comp}
+    da.rename('IRR').load().to_netcdf(path=output_file,
+                                      mode='a',
+                                      engine='netcdf4',
+                                      group='CHEM',
+                                      encoding=encoding)
