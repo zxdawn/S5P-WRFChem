@@ -7,7 +7,6 @@ UPDATE:
        04/01/2020: Add the interp part
        04/12/2020: Finish the AMF part
        03/09/2021: Fix the AMF bug
-
 '''
 
 import os
@@ -35,7 +34,7 @@ def validation(cfg):
     validate_path(cfg['output_fig_dir'], 'output_fig_dir')
 
 
-def load_s5p(date_in, s5p_nc_dir, tm5_prof):
+def load_s5p(date_in, s5p_nc_dir, tm5_prof=False):
     '''Load s5p data'''
     # get the s5p data by the datetime
     f_s5p_pattern = os.path.join(s5p_nc_dir, f'*{date_in.strftime("%Y%m%d")}*')
@@ -58,7 +57,7 @@ def load_s5p(date_in, s5p_nc_dir, tm5_prof):
               'solar_zenith_angle', 'viewing_zenith_angle',
               'tm5_constant_a', 'tm5_constant_b',
               'tm5_tropopause_layer_index',
-              'qa_value',
+              'qa_value', 'processing_quality_flags',
               'no2_scd_flag',  # only available for processed cloudy data
               'time_utc', 'air_mass_factor_troposphere',
               'air_mass_factor_clear', 'air_mass_factor_cloudy', 'amf_geo',
@@ -68,10 +67,14 @@ def load_s5p(date_in, s5p_nc_dir, tm5_prof):
         # Read the TM5-MP a-priori profile
         vnames.extend(['no2_vmr', 'temperature'])
 
-    logging.debug(' '*4 + f'Reading vnames: {vnames}')
-    s5p.load(vnames)
-    # another option: load all available variables
-    # s5p.load(s5p.all_dataset_names())
+    try:
+        s5p.load(vnames)
+    except:
+        vnames.remove('no2_scd_flag')
+        s5p.load(vnames)
+        # another option: load all available variables
+        # s5p.load(s5p.all_dataset_names())
+    logging.debug(' '*4 + f'Loaded vnames: {vnames}')
 
     # using pandas to convert string to timestamp, then to datetime without tz.
     mean_t = pd.to_datetime(s5p['time_utc'].values).mean() \
@@ -159,7 +162,37 @@ def load_wrf(date_in, wrf_nc_dir):
     return wrf_file, wrf
 
 
-def regrid(wrf, s5p, tm5_prof):
+def add_time_dim(da):
+    '''Add the time dimension by filename'''
+    time = datetime.strptime(ntpath.basename(da.encoding['source']).split('_', maxsplit=3)[-1],
+                             '%Y-%m-%d_%H:%M:%S')
+    da = da.assign_coords(Time=[time])
+
+    return da
+
+
+def load_irr(date_in, wrf_nc_dir):
+    '''Load wrf IRR data
+
+    Because loading large files could cost much time,
+    please use "frames_per_outfile=1" in "namelist.input"
+    to generate wrfout* files.
+
+    '''
+
+    # get all wrf output files in the same day
+    f_irr_pattern = os.path.join(wrf_nc_dir, date_in.strftime('IRR_DIAG_*_%Y-%m-%d_*'))
+    irr_list = glob.glob(f_irr_pattern)
+    irr_list.sort()
+
+    # read selected IRR data
+    logging.info(' '*4 + f'Reading {irr_list} ...')
+    irr = xr.open_mfdataset(irr_list, combine='nested', concat_dim='Time', preprocess = add_time_dim)
+
+    return irr
+
+
+def regrid(wrf, s5p, tm5_prof=False):
     '''Get bounds and regrid data to s5p pixels
 
     Currently, the boundary for WRF-Chem option is wrong:
@@ -207,20 +240,20 @@ def regrid(wrf, s5p, tm5_prof):
                                  # reuse_weights=True,
                                  )
 
+        # create regridder
+        regrid_vars = {'no2': regridder(wrf['no2'])/1e6,  # ppm --> ppp
+                       'o3': regridder(wrf['o3'])/1e6,  # ppm --> ppp
+                       'tk': regridder(wrf['T']),
+                       'p': regridder(wrf['P']+wrf['PB'])/100,  # hPa
+                       }
+
         # apply regridder
         if 'no' in wrf.keys():
             # NO is for the retrieval of LNOx
             # It's fine if you don't care about the LNOx
-            regrid_vars = {'no2': regridder(wrf['no2'])/1e6,  # ppm --> ppp
-                           'no': regridder(wrf['no'])/1e6,  # ppm --> ppp
-                           'tk': regridder(wrf['T']),
-                           'p': regridder(wrf['P']+wrf['PB'])/100,  # hPa
-                           }
-        else:
-            regrid_vars = {'no2': regridder(wrf['no2'])/1e6,  # ppm --> ppp
-                           'tk': regridder(wrf['T']),
-                           'p': regridder(wrf['P']+wrf['PB'])/100,  # hPa
-                           }
+            regrid_vars.update({'no': regridder(wrf['no'])/1e6})  # ppm --> pp
+        if 'o3' in wrf.keys():
+            regrid_vars.update({'o3': regridder(wrf['o3'])/1e6})  # ppm --> pp
 
         # set 0 to nan in regridded variables
         #   as no simulation data is available for these pixels
@@ -233,6 +266,59 @@ def regrid(wrf, s5p, tm5_prof):
         interp_ds = interp_to_tm5(regrid_vars, s5p)
 
     return regridder, interp_ds
+
+
+def regrid_irr(irr, wrf, s5p):
+    logging.info(' '*4 + 'Regridding WRF-Chem IRR data to pixels ...')
+
+    # create bounds of wrf and s5p
+    wrf_bounds = {'lon': wrf.lon,
+                  'lat': wrf.lat,
+                  'lon_b': wrf.lon_b,
+                  'lat_b': wrf.lat_b,
+                  }
+
+    s5p_bounds = {'lon': s5p['longitude'],
+                  'lat': s5p['latitude'],
+                  'lon_b': s5p['assembled_lon_bounds'],
+                  'lat_b': s5p['assembled_lat_bounds'],
+                    }
+
+    # create regridder
+    regrid_method = 'conservative_normed'
+    regridder = xe.Regridder(wrf_bounds, s5p_bounds, regrid_method)
+
+    # apply regridder
+    p_wrf = (wrf['P']+wrf['PB'])/100
+    regrid_vars = {'p': regridder(p_wrf)}  # hPa
+
+    # constants
+    NA = 6.022e23
+    R = 8.314
+
+    for varname in irr.keys():
+        if 'IRR' in varname:
+            value = irr[varname]* p_wrf * NA / (R*wrf['T']) * 1e-10  # ppmv --> molec. cm-3
+
+            # drop useless coordinates because lon and lat are enough
+            value = value.drop_vars(['south_north', 'west_east', 'XTIME'])
+
+            regrid_vars.update({varname: regridder(value)})
+
+    # set 0 to nan in regridded variables
+    #   as no simulation data is available for these pixels
+    for key in regrid_vars:
+        regrid_vars[key] = regrid_vars[key].where(regrid_vars[key] > 0)
+
+    logging.info(' '*8 + 'Finish Regridding')
+
+    # save to Dataset
+    interp_ds = interp_to_tm5(regrid_vars, s5p)#.expand_dims('Time')
+
+    # drop useless coordinates
+    interp_ds = interp_ds.drop_vars(['XTIME', 'crs', 'longitude', 'latitude'])
+
+    return interp_ds
 
 
 def cal_bamf(s5p, lut):
@@ -288,13 +374,13 @@ def cal_bamf(s5p, lut):
         so, check https://github.com/pydata/xarray/pull/3924
             and edit the xarray/core/missing.py file by yourself
     '''
-    bAmfClr_p = da.interp(albedo=albedo,
+    bAmfClr_p = da.interp(albedo=albedo.clip(0,1),
                           p_surface=np.log(p_surface),
                           dphi=dphi,
                           mu0=mu0,
                           mu=mu)
 
-    bAmfCld_p = da.interp(albedo=cloud_albedo,
+    bAmfCld_p = da.interp(albedo=cloud_albedo.clip(0,1),
                           p_surface=np.log(p_cloud),
                           dphi=dphi,
                           mu0=mu0,
@@ -340,6 +426,8 @@ def cal_amf(s5p, interp_ds, bAmfClr, bAmfCld, del_lut):
     # for LNOx research
     if 'no' in interp_ds.keys():
         no = interp_ds['no']
+    if 'o3' in interp_ds.keys():
+        o3 = interp_ds['o3']
 
     # the temperature correction factor, see TROPOMI ATBD file
     ts = 220  # temperature of cross-section [K]
@@ -375,6 +463,8 @@ def cal_amf(s5p, interp_ds, bAmfClr, bAmfCld, del_lut):
     # for LNOx research
     if 'no' in interp_ds.keys():
         no = interp_to_layer(no, s5p_pclr, s5p_pcld).rename('noapriori')
+    if 'o3' in interp_ds.keys():
+        o3 = interp_to_layer(o3, s5p_pclr, s5p_pcld).rename('o3apriori')
 
     # logging.info(' '*6 + 'Calculating ghost column ...')
     # ghost = integPr(no2, s5p_pcld, psfc, pcld.rename('tropopause_pressure')).rename('ghost_column')
@@ -453,7 +543,10 @@ def cal_amf(s5p, interp_ds, bAmfClr, bAmfCld, del_lut):
                 ptropo, s5p_pcld.isel(plevel=slice(None, -1))]
 
     if 'no' in interp_ds.keys():
-        saved_da.extend([no, vcdGnd_no])
+        if 'o3' in interp_ds.keys():
+            saved_da.extend([o3, no, vcdGnd_no])
+        else:
+            saved_da.extend([no, vcdGnd_no])
 
     for da in saved_da:
         da_list.append(assign_attrs(da.drop(list(da.coords)), df_attrs))
@@ -503,3 +596,36 @@ def save(s5p, wrf, ds, vnames, output_file, tm5_prof):
                         engine='netcdf4',
                         group=group_name,
                         encoding=encoding)
+
+
+def save_irr(s5p, da, output_file):
+    # set global attributes
+    header_attrs = {'s5p_filename': s5p.attrs['s5p_filename']}
+
+    # add attributes "units"
+    da.attrs['units'] = 'molec. cm$^{-3}$ s$^{-1}$'
+
+    # set compression
+    comp = dict(zlib=True, complevel=9)
+
+    # save loaded s5p data
+    logging.info(' '*4 + f'Saving to {output_file}')
+
+    vnames_s5p = ['p', 'longitude', 'latitude', 'assembled_lat_bounds', 'assembled_lon_bounds']
+    s5p.save_datasets(filename=output_file,
+                      datasets=vnames_s5p,
+                      groups={'S5P': vnames_s5p},
+                      compute=True,
+                      header_attrs=header_attrs,
+                      writer='cf',
+                      engine='netcdf4',
+                      compression=comp,
+                      )
+
+    # save to one netcdf file
+    encoding = {'IRR': comp}
+    da.rename('IRR').load().to_netcdf(path=output_file,
+                                      mode='a',
+                                      engine='netcdf4',
+                                      group='CHEM',
+                                      encoding=encoding)
