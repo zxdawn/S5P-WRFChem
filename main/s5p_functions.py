@@ -109,11 +109,10 @@ def xr_interp(input_array,
 
     return xr.apply_ufunc(
         interp1d_sp,
-        input_array.chunk({
-                          input_p_dimname: input_array.sizes[input_p_dimname],
-                          'y': input_array.shape[1],
-                          'x': input_array.shape[2],
-                          }),
+        input_array.chunk({input_p_dimname: input_array.sizes[input_p_dimname],
+                        'y': input_array.sizes['y'],
+                        'x': input_array.sizes['x'],
+                        }),
         input_p,
         interp_p,
         input_core_dims=[[input_p_dimname], [input_p_dimname], [interp_p_dimname]],
@@ -142,15 +141,14 @@ def interp_to_tm5(regrid_vars, s5p):
     varnames.remove('p')
 
     # combine DataArrays into one DataArray with expanded dimension
+    # https://discourse.pangeo.io/t/combining-a-set-of-2d-variables-into-a-3d-dataarray/1647/5
     combined = xr.concat(regrid_vars.values(),dim=list(regrid_vars.keys())).rename({'concat_dim':'varname'}).rename('profiles')
 
     # interpolate data to s5p pressure levels
     interp_da = np.exp(xr_interp(np.log(combined.drop_sel(varname='p')),
                                           np.log(combined.sel(varname='p')), combined.sel(varname='p').dims[0],
                                           np.log(s5p['p'].rolling({'layer': 2}).mean()[1:, ...].load()), 'layer')
-                       .transpose('layer',
-                                  ...,
-                                  transpose_coords=False)
+                       .transpose('layer', ..., transpose_coords=False)
                        )
 
     # convert to ds for simplier index later

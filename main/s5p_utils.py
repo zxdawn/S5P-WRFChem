@@ -7,7 +7,6 @@ UPDATE:
        04/01/2020: Add the interp part
        04/12/2020: Finish the AMF part
        03/09/2021: Fix the AMF bug
-
 '''
 
 import os
@@ -207,20 +206,20 @@ def regrid(wrf, s5p, tm5_prof):
                                  # reuse_weights=True,
                                  )
 
+        # create regridder
+        regrid_vars = {'no2': regridder(wrf['no2'])/1e6,  # ppm --> ppp
+                       'o3': regridder(wrf['o3'])/1e6,  # ppm --> ppp
+                       'tk': regridder(wrf['T']),
+                       'p': regridder(wrf['P']+wrf['PB'])/100,  # hPa
+                       }
+
         # apply regridder
         if 'no' in wrf.keys():
             # NO is for the retrieval of LNOx
             # It's fine if you don't care about the LNOx
-            regrid_vars = {'no2': regridder(wrf['no2'])/1e6,  # ppm --> ppp
-                           'no': regridder(wrf['no'])/1e6,  # ppm --> ppp
-                           'tk': regridder(wrf['T']),
-                           'p': regridder(wrf['P']+wrf['PB'])/100,  # hPa
-                           }
-        else:
-            regrid_vars = {'no2': regridder(wrf['no2'])/1e6,  # ppm --> ppp
-                           'tk': regridder(wrf['T']),
-                           'p': regridder(wrf['P']+wrf['PB'])/100,  # hPa
-                           }
+            regrid_vars.update({'no': regridder(wrf['no'])/1e6})  # ppm --> pp
+        if 'o3' in wrf.keys():
+            regrid_vars.update({'o3': regridder(wrf['o3'])/1e6})  # ppm --> pp
 
         # set 0 to nan in regridded variables
         #   as no simulation data is available for these pixels
@@ -340,6 +339,8 @@ def cal_amf(s5p, interp_ds, bAmfClr, bAmfCld, del_lut):
     # for LNOx research
     if 'no' in interp_ds.keys():
         no = interp_ds['no']
+    if 'o3' in interp_ds.keys():
+        o3 = interp_ds['o3']
 
     # the temperature correction factor, see TROPOMI ATBD file
     ts = 220  # temperature of cross-section [K]
@@ -375,6 +376,8 @@ def cal_amf(s5p, interp_ds, bAmfClr, bAmfCld, del_lut):
     # for LNOx research
     if 'no' in interp_ds.keys():
         no = interp_to_layer(no, s5p_pclr, s5p_pcld).rename('noapriori')
+    if 'o3' in interp_ds.keys():
+        o3 = interp_to_layer(o3, s5p_pclr, s5p_pcld).rename('o3apriori')
 
     # logging.info(' '*6 + 'Calculating ghost column ...')
     # ghost = integPr(no2, s5p_pcld, psfc, pcld.rename('tropopause_pressure')).rename('ghost_column')
@@ -453,7 +456,10 @@ def cal_amf(s5p, interp_ds, bAmfClr, bAmfCld, del_lut):
                 ptropo, s5p_pcld.isel(plevel=slice(None, -1))]
 
     if 'no' in interp_ds.keys():
-        saved_da.extend([no, vcdGnd_no])
+        if 'o3' in interp_ds.keys():
+            saved_da.extend([o3, no, vcdGnd_no])
+        else:
+            saved_da.extend([no, vcdGnd_no])
 
     for da in saved_da:
         da_list.append(assign_attrs(da.drop(list(da.coords)), df_attrs))
