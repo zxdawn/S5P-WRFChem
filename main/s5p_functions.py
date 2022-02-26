@@ -248,11 +248,12 @@ def cal_tropo(pclr, itropo):
     # get fill_values and overwrite with 0, because index array should be int.
     # Check submitted issue by Xin:
     #   https://github.com/pydata/xarray/issues/3955
+    itropo = itropo.fillna(itropo._FillValue)
     tropo_bool = itropo == itropo._FillValue
     itropo = xr.where(tropo_bool, 0, itropo)
 
     # isel with itropo
-    ptropo = pclr.isel(layer=itropo.load())
+    ptropo = pclr.isel(layer=itropo.load().astype(int))
 
     # mask data and set fill_value pixels to nan
     ptropo = xr.where(tropo_bool, np.nan, ptropo).rename('tropopause_pressure')
@@ -267,10 +268,14 @@ def cal_dphi(saa, vaa):
         the absolute difference between the viewing azimuth angle and
         the solar azimuth angle.
     It ranges between 0 and 180 degrees
+
+    Ref: http://stcorp.github.io/harp/doc/html/algorithms/derivations/relative_azimuth_angle.html
     '''
 
-    dphi = abs(vaa - saa)
-    dphi = xr.where(dphi <= 180, dphi, 360 - dphi)
+    delta = saa - vaa
+    delta = delta.where(delta>=0, delta+360)
+    delta = delta.where(delta<360, delta-360)
+    dphi = abs(delta-180).rename('dphi')
 
     return dphi.rename('dphi')
 
@@ -347,7 +352,8 @@ def integPr(no2, s5p_p, psfc, ptropo):
 
     # sum from surface (ground or cloud pressure) to tropopause
     layername = no2.dims[0]
-    vcd = subcolumn.where(sub_layer[:-1, ...].values).sum(layername, skipna=False)
+    vcd = subcolumn.where(sub_layer[:-1, ...].values).sum(layername, skipna=True)
+    vcd = vcd.where(vcd!=0)
 
     logging.debug(' '*12 + 'Finish integration')
 

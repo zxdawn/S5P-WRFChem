@@ -7,6 +7,7 @@ UPDATE:
        04/01/2020: Add the interp part
        04/12/2020: Finish the AMF part
        03/09/2021: Fix the AMF bug
+       02/26/2022: Add the scene mode
 '''
 
 import os
@@ -50,6 +51,7 @@ def load_s5p(date_in, s5p_nc_dir, tm5_prof=False):
               'latitude', 'longitude',
               'latitude_bounds', 'longitude_bounds',
               'surface_albedo_nitrogendioxide_window', 'surface_pressure',
+              'apparent_scene_pressure', 'scene_albedo', 'snow_ice_flag',
               'cloud_pressure_crb', 'cloud_albedo_crb',
               'cloud_fraction_crb_nitrogendioxide_window',
               'cloud_radiance_fraction_nitrogendioxide_window',
@@ -187,7 +189,7 @@ def load_irr(date_in, wrf_nc_dir):
 
     # read selected IRR data
     logging.info(' '*4 + f'Reading {irr_list} ...')
-    irr = xr.open_mfdataset(irr_list, combine='nested', concat_dim='Time', preprocess = add_time_dim)
+    irr = xr.open_mfdataset(irr_list, combine='nested', concat_dim='Time', preprocess=add_time_dim)
 
     return irr
 
@@ -282,7 +284,7 @@ def regrid_irr(irr, wrf, s5p):
                   'lat': s5p['latitude'],
                   'lon_b': s5p['assembled_lon_bounds'],
                   'lat_b': s5p['assembled_lat_bounds'],
-                    }
+                  }
 
     # create regridder
     regrid_method = 'conservative_normed'
@@ -298,7 +300,7 @@ def regrid_irr(irr, wrf, s5p):
 
     for varname in irr.keys():
         if 'IRR' in varname:
-            value = irr[varname]* p_wrf * NA / (R*wrf['T']) * 1e-10  # ppmv --> molec. cm-3
+            value = irr[varname] * p_wrf * NA / (R*wrf['T']) * 1e-10  # ppmv --> molec. cm-3
 
             # drop useless coordinates because lon and lat are enough
             value = value.drop_vars(['south_north', 'west_east', 'XTIME'])
@@ -313,12 +315,31 @@ def regrid_irr(irr, wrf, s5p):
     logging.info(' '*8 + 'Finish Regridding')
 
     # save to Dataset
-    interp_ds = interp_to_tm5(regrid_vars, s5p)#.expand_dims('Time')
+    interp_ds = interp_to_tm5(regrid_vars, s5p)
 
     # drop useless coordinates
     interp_ds = interp_ds.drop_vars(['XTIME', 'crs', 'longitude', 'latitude'])
 
     return interp_ds
+
+
+def scene_mode(s5p):
+    '''The scene mode is turned on for two situations:
+
+    1. cloud fractions > 1.0
+    2. snow_ice_flag > 5
+
+    Scene mode: the cloud fraction is set to 1
+                the cloud albedo is set to the scene albedo
+                and the cloud pressure is set to the scene pressure.
+    '''
+
+    mask = (s5p['snow_ice_flag'] > 5) | (s5p['cloud_fraction_crb_nitrogendioxide_window'] > 1)
+
+    s5p['cloud_fraction_crb_nitrogendioxide_window'] = xr.where(mask, 1, s5p['cloud_fraction_crb_nitrogendioxide_window'])
+    s5p['cloud_radiance_fraction_nitrogendioxide_window'] = xr.where(mask, 1, s5p['cloud_radiance_fraction_nitrogendioxide_window'])
+    s5p['cloud_pressure_crb'] = xr.where(mask, s5p['apparent_scene_pressure'], s5p['cloud_pressure_crb'])
+    s5p['cloud_albedo_crb'] = xr.where(mask, s5p['scene_albedo'], s5p['cloud_albedo_crb'])
 
 
 def cal_bamf(s5p, lut):
@@ -340,6 +361,12 @@ def cal_bamf(s5p, lut):
     logging.info(' '*4 + 'Calculating box-AMFs using LUT ...')
 
     new_dim = ['y', 'x']
+
+    # bak up the original s5p
+    s5p_origin = s5p.copy()
+
+    # check whether switch to scene mode for each pixels
+    scene_mode(s5p)
 
     # get vars from s5p data
     albedo = xr.DataArray(s5p['surface_albedo_nitrogendioxide_window'],
@@ -374,13 +401,13 @@ def cal_bamf(s5p, lut):
         so, check https://github.com/pydata/xarray/pull/3924
             and edit the xarray/core/missing.py file by yourself
     '''
-    bAmfClr_p = da.interp(albedo=albedo.clip(0,1),
+    bAmfClr_p = da.interp(albedo=albedo.clip(0, 1),
                           p_surface=np.log(p_surface),
                           dphi=dphi,
                           mu0=mu0,
                           mu=mu)
 
-    bAmfCld_p = da.interp(albedo=cloud_albedo.clip(0,1),
+    bAmfCld_p = da.interp(albedo=cloud_albedo.clip(0, 1),
                           p_surface=np.log(p_cloud),
                           dphi=dphi,
                           mu0=mu0,
@@ -412,10 +439,10 @@ def cal_bamf(s5p, lut):
 
     logging.info(' '*8 + 'Finish calculating box-AMFs')
 
-    return bAmfClr, bAmfCld, [albedo, p_surface, cloud_albedo, p_cloud, dphi, mu0, mu]
+    return s5p_origin, bAmfClr, bAmfCld, [albedo, p_surface, cloud_albedo, p_cloud, dphi, mu0, mu]
 
 
-def cal_amf(s5p, interp_ds, bAmfClr, bAmfCld, del_lut):
+def cal_amf(s5p, s5p_origin, interp_ds, bAmfClr, bAmfCld, del_lut):
     '''Calculate AMFs'''
     logging.info(' '*4 + 'Calculating AMFs based on box-AMFs ...')
 
@@ -517,6 +544,12 @@ def cal_amf(s5p, interp_ds, bAmfClr, bAmfCld, del_lut):
     scdTrop = s5p['nitrogendioxide_tropospheric_column'] * s5p['air_mass_factor_troposphere']
     no2Trop = scdTrop / amf
     no2TropVis = scdTrop / amfVis
+
+    # set the variables changed by scene mode to original values
+    s5p['cloud_fraction_crb_nitrogendioxide_window'] = s5p_origin['cloud_fraction_crb_nitrogendioxide_window']
+    s5p['cloud_radiance_fraction_nitrogendioxide_window'] = s5p_origin['cloud_radiance_fraction_nitrogendioxide_window']
+    s5p['cloud_pressure_crb'] = s5p_origin['cloud_pressure_crb']
+    s5p['cloud_albedo_crb'] = s5p_origin['cloud_albedo_crb']
 
     # rename DataArrays
     amf = amf.rename('amfTrop')
