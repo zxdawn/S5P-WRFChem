@@ -268,10 +268,14 @@ def cal_dphi(saa, vaa):
         the absolute difference between the viewing azimuth angle and
         the solar azimuth angle.
     It ranges between 0 and 180 degrees
+
+    Ref: http://stcorp.github.io/harp/doc/html/algorithms/derivations/relative_azimuth_angle.html
     '''
 
-    dphi = abs(vaa - saa)
-    dphi = xr.where(dphi <= 180, dphi, 360 - dphi)
+    delta = saa - vaa
+    delta = delta.where(delta>=0, delta+360)
+    delta = delta.where(delta<360, delta-360)
+    dphi = abs(delta-180).rename('dphi')
 
     return dphi.rename('dphi')
 
