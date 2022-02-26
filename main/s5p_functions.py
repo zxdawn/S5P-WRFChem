@@ -347,7 +347,8 @@ def integPr(no2, s5p_p, psfc, ptropo):
 
     # sum from surface (ground or cloud pressure) to tropopause
     layername = no2.dims[0]
-    vcd = subcolumn.where(sub_layer[:-1, ...].values).sum(layername, skipna=False)
+    vcd = subcolumn.where(sub_layer[:-1, ...].values).sum(layername, skipna=True)
+    vcd = vcd.where(vcd!=0)
 
     logging.debug(' '*12 + 'Finish integration')
 
