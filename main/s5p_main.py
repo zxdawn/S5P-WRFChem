@@ -95,10 +95,10 @@ def main():
             regridder, interp_ds = regrid(wrf, s5p, tm5_prof)
 
             # calculate box amf
-            bAmfClr, bAmfCld, del_lut = cal_bamf(s5p, lut)
+            s5p_origin, bAmfClr, bAmfCld, del_lut = cal_bamf(s5p, lut)
 
             # calculate amf, scattering weights and averaging kernel
-            ds = cal_amf(s5p, interp_ds, bAmfClr, bAmfCld, del_lut)
+            ds = cal_amf(s5p, s5p_origin, interp_ds, bAmfClr, bAmfCld, del_lut)
 
             # save to nc file
             save(s5p, wrf, ds, vnames, output_file, tm5_prof)
