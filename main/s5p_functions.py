@@ -248,11 +248,12 @@ def cal_tropo(pclr, itropo):
     # get fill_values and overwrite with 0, because index array should be int.
     # Check submitted issue by Xin:
     #   https://github.com/pydata/xarray/issues/3955
+    itropo = itropo.fillna(itropo._FillValue)
     tropo_bool = itropo == itropo._FillValue
     itropo = xr.where(tropo_bool, 0, itropo)
 
     # isel with itropo
-    ptropo = pclr.isel(layer=itropo.load())
+    ptropo = pclr.isel(layer=itropo.load().astype(int))
 
     # mask data and set fill_value pixels to nan
     ptropo = xr.where(tropo_bool, np.nan, ptropo).rename('tropopause_pressure')
