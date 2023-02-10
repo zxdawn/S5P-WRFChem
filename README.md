@@ -10,3 +10,5 @@ Some useful Jupyter Notebooks are available at [S5P-WRFChem-Notebook](https://gi
 
 ## Publications
 
+Zhang et al., [Influence of convection on the upper-tropospheric O3 and NOx budget in southeastern China](https://doi.org/10.5194/acp-22-5925-2022
+), Atmos. Chem. Phys.
